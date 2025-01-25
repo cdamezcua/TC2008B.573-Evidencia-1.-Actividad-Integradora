@@ -8,8 +8,9 @@ import PlanoCubos
 import pygame
 
 
-FRAMES_PER_STEP: int = 10
+FRAMES_PER_STEP: int = 5
 NUMBER_OF_DIRECTIONS: int = 4
+NUMBER_OF_AGENTS: int = 5
 
 
 class ForkliftRobotAgent(ap.Agent):
@@ -20,8 +21,20 @@ class ForkliftRobotAgent(ap.Agent):
             [(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1)]
         )
         self.direction: Tuple[int, int, int] = self.prev_direction
-        self.prev_position: Tuple[int, int] = (0, 0, 0)
-        self.position: Tuple[int, int] = (0, 0, 0)
+        self.prev_position: Tuple[int, int] = (-1, -1, -1)
+        self.position: Tuple[int, int] = (-1, -1, -1)
+        while True:
+            x: int = random.randint(0, self.model.warehouse_dimensions[0] - 1)
+            y: int = 0
+            z: int = random.randint(0, self.model.warehouse_dimensions[2] - 1)
+            if (
+                not self.model.is_in_storage_zone((x, y, z))
+                and not self.model.ocupied_initial_positions[x, y, z]
+            ):
+                self.prev_position: Tuple[int, int] = (x, y, z)
+                self.position: Tuple[int, int] = self.prev_position
+                self.model.ocupied_initial_positions[x, y, z] = True
+                break
         self.boxes_in_neighbor_positions: Tuple[int, int, int, int] = (0, 0, 0, 0)
         self.any_robot_in_neighbor_positions: Tuple[bool, bool, bool, bool] = (
             False,
@@ -41,18 +54,8 @@ class ForkliftRobotAgent(ap.Agent):
             False,
             False,
         )
+        self.in_loading_position: bool = False
         self.is_loaded: bool = False
-        while True:
-            x: int = random.randint(0, self.model.warehouse_dimensions[0] - 1)
-            y: int = 0
-            z: int = random.randint(0, self.model.warehouse_dimensions[2] - 1)
-            if (
-                not self.model.is_in_storage_zone((x, y, z))
-                and self.model.warehouse[x, y, z] == 0
-            ):
-                self.prev_position: Tuple[int, int] = (x, y, z)
-                self.position: Tuple[int, int] = self.prev_position
-                break
         self.g_forklift: Forklift.Forklift = Forklift.Forklift()
         self.g_forklift.draw(
             self.position, self.direction, self.fork_height, self.is_loaded
@@ -123,13 +126,20 @@ class ForkliftRobotAgent(ap.Agent):
         self.prev_position = self.position
         self.prev_direction = self.direction
         self.prev_fork_height = self.fork_height
-        if self.fork_height % 6 != 0 and not self.is_loaded:
+        if (
+            self.fork_height % 6 != 0
+            and not self.is_loaded
+            and not self.in_loading_position
+        ):
             return "reset_fork"
         if not self.is_loaded:
             if (
                 self.boxes_in_neighbor_positions[0] > 0
                 and not self.any_wall_in_neighbor_positions[0]
             ):
+                if self.fork_height % 6 == 0:
+                    self.in_loading_position = True
+                    return "prepare_fork_to_load"
                 self.is_loaded = True
                 return "load"
             if (self.boxes_in_neighbor_positions[3] > 0) and not (
@@ -142,14 +152,9 @@ class ForkliftRobotAgent(ap.Agent):
                     and not self.any_wall_in_neighbor_positions[i]
                 ):
                     return "turnleft"
-            if random.random() < 0.75:
-                if not self.any_wall_in_neighbor_positions[0]:
-                    return "move"
-            if random.random() < 0.5:
-                return "turnleft"
-            return "turnright"
         else:
-            if self.fork_height == 0:
+            if self.in_loading_position:
+                self.in_loading_position = False
                 return "lift_fork"
             if (
                 self.is_storage_zone_in_neighbor_positions[0]
@@ -170,14 +175,20 @@ class ForkliftRobotAgent(ap.Agent):
                     and self.boxes_in_neighbor_positions[i] < 5
                 ):
                     return "turnleft"
-            if random.random() < 0.75:
-                if not self.any_wall_in_neighbor_positions[0]:
-                    return "move"
-            if random.random() < 0.5:
-                return "turnleft"
-            return "turnright"
+        if random.random() < 0.75:
+            if (
+                not self.any_wall_in_neighbor_positions[0]
+                and not self.any_robot_in_neighbor_positions[0]
+                and self.boxes_in_neighbor_positions[0] == 0
+            ):
+                return "move"
+        if random.random() < 0.5:
+            return "turnleft"
+        return "turnright"
 
     def action(self, command: str) -> None:
+        if command == "prepare_fork_to_load":
+            self.fork_height = -1
         if command == "load":
             self.model.warehouse[self.relative_position(0)] -= 1
         if command == "lift_fork":
@@ -186,6 +197,7 @@ class ForkliftRobotAgent(ap.Agent):
             self.fork_height = 6 * self.boxes_in_neighbor_positions[0] - 1
         elif command == "unload":
             self.model.warehouse[self.relative_position(0)] += 1
+            self.model.remaining_boxes_to_sort -= 1
         elif command == "reset_fork":
             self.fork_height = 0
         elif command == "move":
@@ -249,6 +261,7 @@ class WarehouseOrganizingRobotsModel(ap.Model):
         return start_x <= x <= end_x and start_y <= y <= end_y and start_z <= z <= end_z
 
     def setup(self) -> None:
+        self.remaining_boxes_to_sort: int = self.p["K"]
         self.warehouse_dimensions: Tuple[int, int, int] = (
             self.p["N_OVER_8"] * 8,
             1,
@@ -259,6 +272,10 @@ class WarehouseOrganizingRobotsModel(ap.Model):
             1,
             self.warehouse_dimensions[2] // 4,
         )
+        PlanoCubos.Init(self.warehouse_dimensions, self.storage_zone_dimensions)
+        self.ocupied_initial_positions: np.ndarray = np.zeros(
+            self.warehouse_dimensions, dtype=bool
+        )
         self.warehouse: np.ndarray = np.zeros(self.warehouse_dimensions, dtype=int)
         for _ in range(self.p["K"]):
             while True:
@@ -267,14 +284,19 @@ class WarehouseOrganizingRobotsModel(ap.Model):
                 z: int = random.randint(0, self.warehouse_dimensions[2] - 1)
                 if (
                     not self.is_in_storage_zone((x, y, z))
-                    and self.warehouse[x, y, z] == 0
+                    and not self.ocupied_initial_positions[x, y, z]
                 ):
                     self.warehouse[x, y, z] = 1
+                    self.ocupied_initial_positions[x, y, z] = True
                     break
-        self.agents: ap.AgentList = ap.AgentList(self, 5, ForkliftRobotAgent)
+        self.agents: ap.AgentList = ap.AgentList(
+            self, NUMBER_OF_AGENTS, ForkliftRobotAgent
+        )
 
     def step(self) -> None:
         self.agents.step()
+        if self.remaining_boxes_to_sort == 0:
+            self.stop()
 
     def update(self) -> None:
         for i in range(FRAMES_PER_STEP):
@@ -282,8 +304,7 @@ class WarehouseOrganizingRobotsModel(ap.Model):
                 if event.type == pygame.QUIT:
                     global done
                     done = True
-                    model.stop()
-                    model.create_output()
+                    self.stop()
             PlanoCubos.display(self.warehouse_dimensions, self.storage_zone_dimensions)
             self.agents.update(i / FRAMES_PER_STEP)
             for x in range(self.warehouse_dimensions[0]):
@@ -296,7 +317,7 @@ class WarehouseOrganizingRobotsModel(ap.Model):
             pygame.time.wait(1)
 
     def end(self) -> None:
-        pass
+        self.report("steps", self.t)
 
 
 parameters: dict = {
@@ -305,12 +326,11 @@ parameters: dict = {
     "K": 20,
 }
 
-model = WarehouseOrganizingRobotsModel(parameters)
-
 done: bool = False
-PlanoCubos.Init()
-model.sim_setup()
+model = WarehouseOrganizingRobotsModel(parameters)
+model.run()
 while not done:
-    if model.running:
-        model.sim_step()
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            done = True
 pygame.quit()
