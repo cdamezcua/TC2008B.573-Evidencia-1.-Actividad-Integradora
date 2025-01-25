@@ -8,13 +8,14 @@ import PlanoCubos
 import pygame
 
 
-FRAMES_PER_STEP: int = 5
+FRAMES_PER_STEP: int = 4
 NUMBER_OF_DIRECTIONS: int = 4
 NUMBER_OF_AGENTS: int = 5
 
 
 class ForkliftRobotAgent(ap.Agent):
     def setup(self) -> None:
+        self.inverse_speed = random.randint(1, 2)
         self.prev_fork_height: int = 0
         self.fork_height: int = 0
         self.prev_direction: Tuple[int, int, int] = random.choice(
@@ -123,6 +124,8 @@ class ForkliftRobotAgent(ap.Agent):
         )
 
     def next(self) -> None:
+        if (self.model.t - 1) % self.inverse_speed != 0:
+            return "idle"
         self.prev_position = self.position
         self.prev_direction = self.direction
         self.prev_fork_height = self.fork_height
@@ -187,11 +190,13 @@ class ForkliftRobotAgent(ap.Agent):
         return "turnright"
 
     def action(self, command: str) -> None:
-        if command == "prepare_fork_to_load":
+        if command == "idle":
+            pass
+        elif command == "prepare_fork_to_load":
             self.fork_height = -1
-        if command == "load":
+        elif command == "load":
             self.model.warehouse[self.relative_position(0)] -= 1
-        if command == "lift_fork":
+        elif command == "lift_fork":
             self.fork_height = 6
         elif command == "prepare_fork_to_unload":
             self.fork_height = 6 * self.boxes_in_neighbor_positions[0] - 1
@@ -218,25 +223,37 @@ class ForkliftRobotAgent(ap.Agent):
             )
 
     def update(self, interpolation_factor: float = 0.0) -> None:
+        chunk_index: int = (self.model.t - 1) % self.inverse_speed
+        chunk_start = chunk_index / self.inverse_speed
+        chunk_end = (chunk_index + 1) / self.inverse_speed
+        scaled_interpolation_factor = chunk_start + interpolation_factor * (
+            chunk_end - chunk_start
+        )
         self.g_forklift.draw(
             (
                 self.prev_position[0]
-                + (self.position[0] - self.prev_position[0]) * interpolation_factor,
+                + (self.position[0] - self.prev_position[0])
+                * scaled_interpolation_factor,
                 self.prev_position[1]
-                + (self.position[1] - self.prev_position[1]) * interpolation_factor,
+                + (self.position[1] - self.prev_position[1])
+                * scaled_interpolation_factor,
                 self.prev_position[2]
-                + (self.position[2] - self.prev_position[2]) * interpolation_factor,
+                + (self.position[2] - self.prev_position[2])
+                * scaled_interpolation_factor,
             ),
             (
                 self.prev_direction[0]
-                + (self.direction[0] - self.prev_direction[0]) * interpolation_factor,
+                + (self.direction[0] - self.prev_direction[0])
+                * scaled_interpolation_factor,
                 self.prev_direction[1]
-                + (self.direction[1] - self.prev_direction[1]) * interpolation_factor,
+                + (self.direction[1] - self.prev_direction[1])
+                * scaled_interpolation_factor,
                 self.prev_direction[2]
-                + (self.direction[2] - self.prev_direction[2]) * interpolation_factor,
+                + (self.direction[2] - self.prev_direction[2])
+                * scaled_interpolation_factor,
             ),
             self.prev_fork_height
-            + (self.fork_height - self.prev_fork_height) * interpolation_factor,
+            + (self.fork_height - self.prev_fork_height) * scaled_interpolation_factor,
             self.is_loaded,
         )
 
