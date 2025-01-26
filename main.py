@@ -6,6 +6,7 @@ import CuboA
 import Forklift
 import PlanoCubos
 import pygame
+import matplotlib.pyplot as plt
 
 
 FRAMES_PER_STEP: int = 4
@@ -15,6 +16,7 @@ NUMBER_OF_AGENTS: int = 5
 
 class ForkliftRobotAgent(ap.Agent):
     def setup(self) -> None:
+        self.step_count = 0
         self.inverse_speed = random.randint(1, 2)
         self.prev_fork_height: int = 0
         self.fork_height: int = 0
@@ -207,20 +209,21 @@ class ForkliftRobotAgent(ap.Agent):
             self.fork_height = 0
         elif command == "move":
             self.position = self.relative_position(0)
+            self.step_count += 1
         elif command == "turnleft":
-            self.prev_direction = self.direction
             self.direction = (
                 -self.direction[2],
                 self.direction[1],
                 self.direction[0],
             )
+            self.step_count += 1
         elif command == "turnright":
-            self.prev_direction = self.direction
             self.direction = (
                 self.direction[2],
                 self.direction[1],
                 -self.direction[0],
             )
+            self.step_count += 1
 
     def update(self, interpolation_factor: float = 0.0) -> None:
         chunk_index: int = (self.model.t - 1) % self.inverse_speed
@@ -309,6 +312,8 @@ class WarehouseOrganizingRobotsModel(ap.Model):
         self.agents: ap.AgentList = ap.AgentList(
             self, NUMBER_OF_AGENTS, ForkliftRobotAgent
         )
+        self.steps_over_time = {i: [] for i in range(len(self.agents))}
+        self.total_steps_of_agent = {i: 0 for i in range(len(self.agents))}
 
     def step(self) -> None:
         self.agents.step()
@@ -316,6 +321,9 @@ class WarehouseOrganizingRobotsModel(ap.Model):
             self.stop()
 
     def update(self) -> None:
+        for i, agent in enumerate(self.agents):
+            self.total_steps_of_agent[i] = agent.step_count
+            self.steps_over_time[i].append(agent.step_count)
         for i in range(FRAMES_PER_STEP):
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -334,7 +342,11 @@ class WarehouseOrganizingRobotsModel(ap.Model):
             pygame.time.wait(1)
 
     def end(self) -> None:
-        self.report("steps", self.t)
+        self.report("time_to_sort_all_boxes", self.t)
+        self.report("steps_over_time", self.steps_over_time)
+        self.report("total_steps_of_agent", self.total_steps_of_agent)
+        total_steps = sum(self.total_steps_of_agent.values())
+        self.report("total_steps", total_steps)
 
 
 parameters: dict = {
@@ -342,7 +354,6 @@ parameters: dict = {
     "M_OVER_8": 3,
     "K": 20,
 }
-
 done: bool = False
 model = WarehouseOrganizingRobotsModel(parameters)
 model.run()
@@ -351,3 +362,26 @@ while not done:
         if event.type == pygame.QUIT:
             done = True
 pygame.quit()
+steps_over_time = model.reporters["steps_over_time"]
+for i in range(len(steps_over_time)):
+    plt.plot(steps_over_time[i], label=f"Robot {i}")
+plt.xlabel("Time")
+plt.ylabel("Accumulated Steps")
+plt.legend()
+plt.title("Accumulated Steps of each Robot over Time")
+plt.show()
+total_steps_of_agent = model.reporters["total_steps_of_agent"]
+robots = list(total_steps_of_agent.keys())
+steps = list(total_steps_of_agent.values())
+fig, ax = plt.subplots()
+bars = ax.bar(robots, steps, tick_label=[f"Robot {i}" for i in robots])
+ax.set_xlabel("Robots")
+ax.set_ylabel("Total Steps")
+ax.set_title("Total Steps Taken by Each Robot")
+ax.bar_label(bars, label_type="edge")
+plt.show()
+print("Time to sort all boxes:", model.reporters["time_to_sort_all_boxes"])
+print(
+    "Total steps taken by all robots (when considering: move, turnleft, and turnright actions as moves):",
+    model.reporters["total_steps"],
+)
